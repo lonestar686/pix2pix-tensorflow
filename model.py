@@ -152,10 +152,12 @@ class pix2pix(object):
         else:
             print(" [!] Load failed...")
 
+        # the data
+        data = glob('./datasets/{}/train/*.jpg'.format(self.dataset_name))
+        #np.random.shuffle(data)
+        batch_idxs = min(len(data), args.train_size) // self.batch_size
+
         for epoch in xrange(args.epoch):
-            data = glob('./datasets/{}/train/*.jpg'.format(self.dataset_name))
-            #np.random.shuffle(data)
-            batch_idxs = min(len(data), args.train_size) // self.batch_size
 
             for idx in xrange(0, batch_idxs):
                 batch_files = data[idx*self.batch_size:(idx+1)*self.batch_size]
