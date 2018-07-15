@@ -97,4 +97,142 @@ def transform(image, npx=64, is_crop=True, resize_w=64):
 def inverse_transform(images):
     return (images+1.)/2.
 
+#
+import tensorflow as tf
+import glob
+import os
+
+#
+CROP_SIZE  = 256
+SCALE_SIZE = 286
+
+def preprocess(image):
+    with tf.name_scope("preprocess"):
+        # [0, 1] => [-1, 1]
+        return image * 2 - 1
+
+def deprocess(image):
+    with tf.name_scope("deprocess"):
+        # [-1, 1] => [0, 1]
+        return (image + 1) / 2
+
+#
+def load_batch_examples(dataset_name, which_direction, batch_size):
+    # input directory
+    input_dir = './datasets/{}/train'.format(dataset_name)
+    if input_dir is None or not os.path.exists(input_dir):
+        raise Exception("input_dir does not exist")
+
+    # input files
+    input_paths = glob.glob(os.path.join(input_dir, '*.jpg'))
+    decode = tf.image.decode_jpeg
+    if len(input_paths) == 0:
+        input_paths = glob.glob(os.path.join(input_dir, "*.png"))
+        decode = tf.image.decode_png
+
+    if len(input_paths) == 0:
+        raise Exception("input_dir contains no image files")
+
+    def get_name(path):
+        name, _ = os.path.splitext(os.path.basename(path))
+        return name
+
+    # if the image names are numbers, sort by the value rather than asciibetically
+    # having sorted inputs means that the outputs are sorted in test mode
+    if all(get_name(path).isdigit() for path in input_paths):
+        input_paths = sorted(input_paths, key=lambda path: int(get_name(path)))
+    else:
+        input_paths = sorted(input_paths)
+
+    with tf.name_scope("load_images"):
+        # Make a Dataset of file names including all the JPEG images files in
+        # the relative image directory.
+        dataset = tf.data.Dataset.from_tensor_slices(input_paths)
+
+        # Make a Dataset of image tensors by reading and decoding the files.
+        dataset = dataset.map(lambda x: load_one_example(decode, x, which_direction), num_parallel_calls=None)
+    #
+    dataset = dataset.map(transform_pairs, num_parallel_calls=None).repeat().batch(batch_size)
+
+    return dataset, len(input_paths)
+
+def load_one_example(decode, filename, which_direction):
+    # Make a Dataset of image tensors by reading and decoding the files.
+    raw_input = decode(tf.read_file(filename))
+    raw_input = tf.image.convert_image_dtype(raw_input, dtype=tf.float32)
+
+    assertion = tf.assert_equal(tf.shape(raw_input)[2], 3, message="image does not have 3 channels")
+    with tf.control_dependencies([assertion]):
+        raw_input = tf.identity(raw_input)
+
+    raw_input.set_shape([None, None, 3])
+
+    # break apart image pair and move to range [-1, 1]
+    width = tf.shape(raw_input)[1] # [height, width, channels]
+    a_images = preprocess(raw_input[:,:width//2,:])
+    b_images = preprocess(raw_input[:,width//2:,:])
+
+    #
+    if which_direction == "AtoB":
+        inputs, targets = [a_images, b_images]
+    elif which_direction == "BtoA":
+        inputs, targets = [b_images, a_images]
+    else:
+        raise Exception("invalid direction")
+
+    return inputs, targets
+
+def transform_pairs(inputs, targets, flip=False, scale_size=SCALE_SIZE, crop_size=CROP_SIZE):
+    # synchronize seed for image operations so that we do the same operations to both
+    # input and output images
+    seed = random.randint(0, 2**31 - 1)
+    def transform(image, flip=flip, scale_size=scale_size, crop_size=crop_size):
+        r = image
+        if flip:
+            r = tf.image.random_flip_left_right(r, seed=seed)
+
+        # area produces a nice downscaling, but does nearest neighbor for upscaling
+        # assume we're going to be doing downscaling here
+        r = tf.image.resize_images(r, [scale_size, scale_size], method=tf.image.ResizeMethod.AREA)
+
+        offset = tf.cast(tf.floor(tf.random_uniform([2], 0, scale_size - crop_size + 1, seed=seed)), dtype=tf.int32)
+        if scale_size > crop_size:
+            r = tf.image.crop_to_bounding_box(r, offset[0], offset[1], crop_size, crop_size)
+        elif scale_size < crop_size:
+            raise Exception("scale size cannot be less than crop size")
+
+        return r
+
+    with tf.name_scope("input_images"):
+        input_images = transform(inputs)
+
+    with tf.name_scope("target_images"):
+        target_images = transform(targets)
+
+    return input_images, target_images
+
+if __name__ == '__main__':
+    # dataset
+    dataset_name = 'facades'
+    image_dataset, steps_per_epoch = load_batch_examples(dataset_name, which_direction="AtoB", batch_size=1)
+
+    #
+    iter = image_dataset.make_one_shot_iterator()
+    inputs_batch, targets_batch = iter.get_next()
+
+    # for testing
+    inputs_batch = deprocess(inputs_batch[0])
+    targets_batch = deprocess(targets_batch[0])
+
+    with tf.Session() as sess:
+        img_A, img_B = sess.run([inputs_batch, targets_batch])
+
+    import matplotlib.pyplot as plt
+    plt.subplot(211)
+    plt.imshow(img_A)
+    plt.subplot(212)
+    plt.imshow(img_B)
+
+    plt.show()
+
 
