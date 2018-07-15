@@ -79,8 +79,8 @@ class pix2pix(object):
         # self.real_B = self.real_data[:, :, :, :self.input_c_dim]
         # self.real_A = self.real_data[:, :, :, self.input_c_dim:self.input_c_dim + self.output_c_dim]
 
-        self.real_B = targets_batch[:, :, :, :self.input_c_dim]
-        self.real_A = inputs_batch[:, :, :, :self.output_c_dim]
+        self.real_B = targets_batch
+        self.real_A = inputs_batch
 
         # generated fake data
         self.fake_B = self.generator(self.real_A)
